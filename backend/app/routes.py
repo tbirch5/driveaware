@@ -15,7 +15,7 @@ ALLOWED_EXTENSIONS = {'csv', 'json'}
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-
+# file metadata
 def log_file_metadata(filename, filepath):
     metadata = {
         "filename": filename,
@@ -38,8 +38,23 @@ def log_file_metadata(filename, filepath):
     except Exception as e:
         print(f"Logging failed: {e}")
 
+# inference helper function - route below
+def run_basic_inference(df):
+    def classify(row):
+        if row['speed'] > 70:
+            return "Speeding"
+        elif row['brake'] > 0.5:
+            return "Hard Brake"
+        elif abs(row['steering_angle']) > 0.5:
+            return "Sharp Turn"
+        else:
+            return "Normal"
+
+    df['prediction'] = df.apply(classify, axis=1)
+    return df[['timestamp', 'speed', 'steering_angle', 'acceleration', 'brake', 'prediction']]
 
 
+# file status api file
 @api_blueprint.route("/status", methods=["GET"])
 def status():
     return jsonify({"status": "DriveAware backend is running!"})
@@ -57,11 +72,17 @@ def upload_data():
     if file and allowed_file(file.filename):
         filename = secure_filename(file.filename)
         filepath = os.path.join(UPLOAD_FOLDER, filename)
+        os.makedirs(UPLOAD_FOLDER, exist_ok=True) # added to ensure folder exists
         file.save(filepath)
+
+        log_file_metadata(filename, filepath)
+
         return jsonify({"message": f"File '{filename}' uploaded successfully"}), 200
+
 
     return jsonify({"error": "Invalid file type"}), 400
 
+# uploads preview file
 @api_blueprint.route("/upload/preview", methods=["POST"])
 def preview_data():
     if 'file' not in request.files:
@@ -92,6 +113,7 @@ def preview_data():
 
     return jsonify({"error": "Invalid file type"}), 400
 
+# preview file uploaded
 @api_blueprint.route("/preview/<filename>", methods=["GET"])
 def preview_uploaded_file(filename):
     filepath = os.path.join(UPLOAD_FOLDER, secure_filename(filename))
@@ -116,7 +138,7 @@ def preview_uploaded_file(filename):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
+# get api uploads
 @api_blueprint.route("/uploads", methods=["GET"])
 def list_uploaded_files():
     try:
@@ -130,3 +152,26 @@ def list_uploaded_files():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     
+# model inference from uploaded file data. Simulate driving behavior detection model 
+# Simple rule-based inference such as flagging high speed or hard brake events and return basic predictions for the first few rows
+
+@api_blueprint.route("/inference/<filename>", methods=["GET"])
+def run_inference(filename):
+    filepath = os.path.join(UPLOAD_FOLDER, secure_filename(filename))
+
+    if not os.path.exists(filepath):
+        return jsonify({"error": "File not found"}), 404
+
+    try:
+        df = pd.read_csv(filepath, on_bad_lines='skip', engine='python')
+        df_inferred = run_basic_inference(df)
+
+        result = df_inferred.head(10).to_dict(orient='records')
+        return jsonify({
+            "filename": filename,
+            "inference_preview": result,
+            "total_rows": len(df)
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
